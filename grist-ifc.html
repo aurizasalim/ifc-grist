@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>IFC Viewer - Grist Widget (v1)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f4f4f6;
+  }
+  #toolbar {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #toolbar label {
+    background: #16665e;
+    color: white;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  #toolbar label:hover { background: #12524b; }
+  #status {
+    font-size: 12px;
+    color: #555;
+    background: rgba(255,255,255,0.85);
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
+  #file-input { display: none; }
+  #viewer-container {
+    width: 100%;
+    height: 100%;
+  }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <label for="file-input">Load IFC file</label>
+  <input type="file" id="file-input" accept=".ifc" />
+  <span id="status">No model loaded</span>
+</div>
+
+<div id="viewer-container"></div>
+
+<!-- Grist plugin API: lets Grist recognize this page as a custom widget.
+     Not used for data binding yet in this first version — that comes later. -->
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://esm.sh/three@0.160.0",
+    "three/addons/": "https://esm.sh/three@0.160.0/examples/jsm/",
+    "web-ifc-three/IFCLoader": "https://esm.sh/web-ifc-three@0.0.126/IFCLoader"
+  }
+}
+</script>
+
+<script type="module">
+  import * as THREE from "three";
+  import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+  import { IFCLoader } from "web-ifc-three/IFCLoader";
+
+  const container = document.getElementById("viewer-container");
+  const statusEl = document.getElementById("status");
+  const fileInput = document.getElementById("file-input");
+
+  // --- Basic three.js scene setup ---
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xf4f4f6);
+
+  const camera = new THREE.PerspectiveCamera(
+    60,
+    container.clientWidth / container.clientHeight,
+    0.1,
+    1000
+  );
+  camera.position.set(10, 10, 10);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  // Lights
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(20, 30, 10);
+  scene.add(dirLight);
+
+  // Simple ground grid for spatial reference
+  const grid = new THREE.GridHelper(50, 50, 0xcccccc, 0xe5e5e5);
+  scene.add(grid);
+
+  // --- IFC loader setup ---
+  const ifcLoader = new IFCLoader();
+  // Points to the matching web-ifc wasm build. If loading fails, this
+  // version may need to match the web-ifc-three version pinned above.
+  ifcLoader.ifcManager.setWasmPath("https://unpkg.com/web-ifc@0.0.44/");
+
+  let currentModel = null;
+
+  function loadIfcFile(file) {
+    statusEl.textContent = "Loading " + file.name + "...";
+    const url = URL.createObjectURL(file);
+
+    ifcLoader.load(
+      url,
+      (model) => {
+        if (currentModel) {
+          scene.remove(currentModel);
+        }
+        scene.add(model);
+        currentModel = model;
+        frameModel(model);
+        statusEl.textContent = "Loaded: " + file.name;
+        URL.revokeObjectURL(url);
+      },
+      undefined,
+      (error) => {
+        console.error("IFC load error:", error);
+        statusEl.textContent = "Failed to load IFC file (see console)";
+      }
+    );
+  }
+
+  // Center camera on the loaded model
+  function frameModel(model) {
+    const box = new THREE.Box3().setFromObject(model);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z) || 10;
+
+    controls.target.copy(center);
+    camera.position.copy(center).add(
+      new THREE.Vector3(maxDim, maxDim, maxDim)
+    );
+    camera.near = maxDim / 100;
+    camera.far = maxDim * 100;
+    camera.updateProjectionMatrix();
+    controls.update();
+  }
+
+  fileInput.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (file) loadIfcFile(file);
+  });
+
+  // --- Render loop ---
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // --- Handle resize ---
+  window.addEventListener("resize", () => {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  });
+
+  // --- Register with Grist so it's recognized as a custom widget ---
+  if (window.grist) {
+    grist.ready({ requiredAccess: "none" });
+  }
+</script>
+
+</body>
+</html>
